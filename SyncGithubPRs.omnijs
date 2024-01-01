@@ -1,0 +1,121 @@
+/*{
+    "author": "Kees van Ginkel",
+    "targets": ["omnifocus"],
+    "type": "action",
+    "identifier": "com.mcginkel.SyncPRs",
+    "version": "1.0",
+    "description": "A plug-in that synchonises my PR's in github with taks in a omnifocus folder",
+    "label": "Sync Github PRs",
+    "mediumLabel": "Sync PRs",
+    "longLabel": "Sync Github PRs",
+    "paletteLabel": "Sync Github PRs",
+}*/
+(() => {
+    var GitHubauthToken = "<yourAuthTokenHere>"
+    var GitHubAPIUrl = "https://api.github.com/search/issues?q=state%3Aopen+type%3Apr"
+    var projOpenPRName = "MyOpenPRs"
+    var projRequestedPRName = "MyRequestedPRs"
+    var githubTagObj = flattenedTags.byName("Github") || new Tag("Github")
+
+    processOpenPRs = function(MyPRsOnGithub, project, githubTagObj) {
+        // unflag all tasks. we will reflag the active ones.
+        project.tasks.forEach(task => {
+            if (task.tags.byName("Github")!=null) {
+                task.flagged = false
+            }
+        })
+        
+        // order by repository name. (only usefull the first time)
+        MyPRsOnGithub = MyPRsOnGithub.sort((a, b) => a.repository_url < b.repository_url)
+        for (i = 0; i < MyPRsOnGithub.length; i++) { 
+            pr = MyPRsOnGithub[i]
+            number = pr.number.toString().padStart(5, "00000")
+            title = pr.title
+            id = pr.id
+            link = pr.html_url
+            repo = pr.repository_url.split("/").pop()
+
+            fullname = `${repo} - ${number}: ${title}`
+            console.log(fullname)
+            var task = project.taskNamed(fullname)
+            if (task == null) {
+                task = new Task(fullname, project)
+                task.note = link
+                task.flagged = true
+                task.dueDate = new Date()
+                task.addTag(githubTagObj)
+            } else {
+                task.flagged = true
+            }
+        }
+
+        // close Tasks for closed PR's
+        project.tasks.forEach(task => {
+            if (task.tags.byName("Github")!=null && task.flagged==false) {
+                task.markComplete()
+            }
+        })
+    }
+
+    getPRsandProcess = async function(url, project){
+
+
+        request = URL.FetchRequest.fromString(url)
+        request.method = 'GET'
+        request.cache = "no-cache"
+        authStr = `Bearer ${GitHubauthToken}`
+        request.headers = {
+            "content-type": "application/json",
+            "Authorization": authStr
+        }
+
+        response = await request.fetch()
+        responseCode = response.statusCode
+        if (responseCode >= 200 && responseCode < 300){
+            responseJSON = JSON.parse(response.bodyString)
+            retrievedMsgCount = responseJSON.total_count
+            
+            // console.log("Total:", retrievedMsgCount)
+            
+            processOpenPRs(responseJSON.items, project, githubTagObj)
+            
+        } else {
+            throw {
+                name: responseCode,
+                message: "There was an issue retrieving the PR's."
+            }			
+        }
+
+    }
+
+    var action = new PlugIn.Action(async function(selection) {
+        // Add code to run when the action is invoked
+        console.log("Invoked with selection", selection);
+
+        var projOpenPRObj = flattenedProjects.byName(projOpenPRName) || new Project(projOpenPRName)
+        var projRequestedPRObj = flattenedProjects.byName(projRequestedPRName) || new Project(projRequestedPRName)
+        var activeGitHubAPIUrl = GitHubAPIUrl + "+author:@me"
+        var requestedPRAPIUrl = GitHubAPIUrl +"+user-review-requested:@me"
+
+        try {
+
+            await getPRsandProcess(activeGitHubAPIUrl, projOpenPRObj)
+            await getPRsandProcess(requestedPRAPIUrl, projRequestedPRObj)
+
+        }
+        catch(err){
+            if(!err.causedByUserCancelling){
+                new Alert(err.name, err.message).show()
+            }
+        }
+    });
+
+    // If needed, uncomment, and add a function that returns true if the current selection is appropriate for the action.
+    /*
+    action.validate = function(selection){
+
+    };
+    */
+    
+    return action;
+})();
